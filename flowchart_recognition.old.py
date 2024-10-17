@@ -73,6 +73,8 @@ def flowchart(filename, padding=25, offset=10, arrow=30, gui=True):
     boundingBoxes = [cv2.boundingRect(contour) for contour in contours]
     contours, boundingBoxes = zip(*sorted(zip(contours, boundingBoxes), key=lambda b: b[1][1], reverse=False))
 
+    # contours = contours[0] if imutils.is_cv2() else contours[1]
+
     nodes, index, outside_texts, shapes, arrow_lines = {}, 1, {}, [], {}
     # loop over the contours
     for idx, contour in enumerate(contours):
@@ -116,6 +118,8 @@ def flowchart(filename, padding=25, offset=10, arrow=30, gui=True):
                     else:
                         shape = "circle"
 
+                # multiply the contour (x, y)-coordinates by the resize ratio,
+                # then draw the contours and the name of the  shape on the image
                 contour = contour.astype("float")
                 contour *= ratio
                 contour = contour.astype("int")
@@ -127,6 +131,7 @@ def flowchart(filename, padding=25, offset=10, arrow=30, gui=True):
                     cv2.drawContours(cropped, [contour], -1, (255, 255, 255), padding)
                     cropped = cropped[y:y + h, x:x + w]
                     text = pytesseract.image_to_string(cropped)
+                    # print(text)
                     if text == '':
                         position = 'Outside'
                     else:
@@ -151,27 +156,34 @@ def flowchart(filename, padding=25, offset=10, arrow=30, gui=True):
                         shape = 'text'
                         outside_texts[idx] = text
                     else:
+                        # print(idx)
                         A, B, C, D = (x, y), (x, y + h), (x + w, y + h), (x + w, y)
                         start_point, end_point = None, None
                         for point in contour:
                             if point[0][0] < x + offset and point[0][1] < y + offset:
                                 start_point = A
+                                # print('A')
                                 break
                             elif point[0][0] < x + offset and point[0][1] > y + h - offset:
                                 start_point = B
+                                # print('B')
                                 break
                         if start_point is None:
                             start_point = A
+                            # print(start_point)
 
                         for point in contour:
                             if point[0][0] > x + w - offset and point[0][1] > y + h - offset:
                                 end_point = C
+                                # print('C')
                                 break
                             elif point[0][0] > x + w - offset and point[0][1] < y + offset:
                                 end_point = D
+                                # print('D')
                                 break
                         if end_point is None:
                             end_point = C
+                            # print(end_point)
 
                         start_contour_count, end_contour_count = 0, 0
                         for point in contour:
@@ -180,12 +192,16 @@ def flowchart(filename, padding=25, offset=10, arrow=30, gui=True):
                             elif (point[0][0] - end_point[0]) ** 2 + (point[0][1] - end_point[1]) ** 2 < arrow ** 2:
                                 end_contour_count += 1
 
+                        # print(idx, start_point, end_point)
                         if start_contour_count > end_contour_count:
+                            # print(start_contour_count, end_contour_count)
                             reverse = True
                         else:
                             reverse = False
+                        # print(idx, reverse)
                         arrow_lines[idx] = (np.array(start_point), np.array(end_point), reverse)
 
+                # print(idx, shape, area/circumstance)
                 cv2.drawContours(image, [contour], -1, (0, 255, 0), 2)
                 cv2.putText(
                     img=image, text=' '.join([str(idx), shape]), org=(cx + 10, cy - 20),
@@ -195,6 +211,52 @@ def flowchart(filename, padding=25, offset=10, arrow=30, gui=True):
                     img=image, text=text, org=(cx + 10, cy + 40),
                     fontFace=cv2.FONT_HERSHEY_COMPLEX_SMALL, fontScale=1, color=(255, 0, 0), thickness=2
                 )
+
+        else:
+            cv2.drawContours(image, contours, -1, (0, 0, 0), -1)
+
+    l = len(contours)
+    for i in nodes.keys():
+        if nodes[i]['Name'] == '':
+            for j in range(1, max(i + 1, l - i)):
+                mn, mx = min(i + j, l - 1), max(0, i - j)
+
+                if mn in outside_texts.keys():
+                    nodes[i]['Name'] = outside_texts[mn]
+                    break
+                elif mx in outside_texts.keys():
+                    nodes[i]['Name'] = outside_texts[mx]
+                    break
+
+    for arrow_line in arrow_lines.keys():
+        start_point, end_point, reverse = arrow_lines[arrow_line]
+        # print(arrow_line, start_point, end_point, reverse)
+        start_point *= 2
+        end_point *= 2
+
+        start_distances, end_distances = {}, {}
+        for i in range(l):
+            if i in shapes:
+                x, y, w, h = boundingBoxes[i]
+                A, B, C, D = np.array((x, y)), np.array((x, y + h)), np.array((x + w, y + h)), np.array((x + w, y))
+
+                start_distance_bc = distance(B, C, start_point)
+                start_distance_cd = distance(C, D, start_point)
+                start_distances[i] = min(start_distance_bc, start_distance_cd)
+
+                end_distance_ab = distance(A, B, end_point)
+                end_distance_da = distance(D, A, end_point)
+                end_distances[i] = min(end_distance_ab, end_distance_da)
+
+        if len(start_distances) > 0:
+            start_node, _ = sorted(start_distances.items(), key=itemgetter(1))[0]
+            end_node, _ = sorted(end_distances.items(), key=itemgetter(1))[0]
+            # print(arrow_line, start_node, end_node)
+
+            if reverse:
+                nodes[end_node]['Line'].append(nodes[start_node]['Name'])
+            else:
+                nodes[start_node]['Line'].append(nodes[end_node]['Name'])
 
     for node in nodes.keys():
         nodes[node]['Line'] = ', '.join(nodes[node]['Line'])
@@ -207,10 +269,9 @@ def flowchart(filename, padding=25, offset=10, arrow=30, gui=True):
     with open('data.json', 'w') as file:
         dump({'Node': nodes}, file)
 
-    # Save instead of showing image
-    output_file = filename.replace(".png", "_processed.png").replace(".jpg", "_processed.jpg")
-    cv2.imwrite(output_file, image)
-    print(f"Processed image saved as {output_file}")
+    if gui:
+        cv2.imshow("Image", image)
+        cv2.waitKey(0)
 
     try:
         os.remove("text.png")
